@@ -1,0 +1,210 @@
+# server.cyr — M1-A event-loop skeleton.
+#
+# Single-thread epoll loop per ADR 0003. Owns the listener fd, the
+# signalfd (SIGINT / SIGTERM for clean shutdown), and the 2.5 s
+# combat-tick scheduler. M1-A scope: the loop spins, accepts
+# connections, sends a placeholder banner, and closes — Telnet parser
+# (M1-C) + session struct (M1-B) land in following bites.
+
+# === Constants ===
+
+enum ServerConst {
+    DEFAULT_PORT     = 4000;   # classic DikuMUD-family port; 23 is privileged
+    LISTEN_BACKLOG   = 32;
+    TICK_MS          = 2500;   # ADR 0001 — 2.5 s combat tick
+    MAX_EPOLL_EVENTS = 64;
+    EPOLL_EVENT_SIZE = 12;     # kernel writes packed { u32 events; u64 data }
+}
+
+# Tags discriminating epoll user-data values. Listener and signalfd
+# carry these constants; future per-connection sessions (M1-B) will
+# carry pointers tagged at higher addresses.
+enum FdTag {
+    TAG_LISTENER = 1;
+    TAG_SIGNAL   = 2;
+}
+
+# === fcntl helper — set O_NONBLOCK on an fd ===
+#
+# lib/net.cyr's net_connect_nb open-codes the same fcntl pair; we
+# need it stand-alone here for the listener (and, at M1-B, every
+# accepted client). Returns 0 on success, negative errno on failure.
+fn set_nonblock(fd): i64 {
+    var flags = syscall(SYS_FCNTL, fd, 3, 0);        # F_GETFL
+    if (flags < 0) { return flags; }
+    return syscall(SYS_FCNTL, fd, 4, flags | O_NONBLOCK);   # F_SETFL
+}
+
+# === Block SIGINT / SIGTERM and return a signalfd watching them ===
+#
+# Signals are blocked process-wide so they don't interrupt epoll_wait;
+# the signalfd surfaces them as readable events in the same epoll set
+# the listener lives in. Returns the signalfd or negative errno.
+fn install_signal_fd(): i64 {
+    var mask = sigset_new();
+    sigset_add(mask, SIGINT);
+    sigset_add(mask, SIGTERM);
+    var pr = sys_sigprocmask(SIG_BLOCK, mask, 0);
+    if (pr < 0) { return pr; }
+    return sys_signalfd(0 - 1, mask, 0);
+}
+
+# === Register an fd in the epoll set with EPOLLIN + a u64 data tag. ===
+fn epoll_add_in(epfd, fd, data_tag): i64 {
+    var ev = epoll_event_new(EPOLLIN, data_tag);
+    return sys_epoll_ctl(epfd, EPOLL_CTL_ADD, fd, ev);
+}
+
+# === Send a NUL-terminated string to a socket, best-effort. ===
+#
+# Loops until every byte is sent or sys_write reports an error. Used
+# by the M1-A placeholder banner; M1-B replaces this with the session
+# tx-queue drainer.
+fn send_cstr(fd, s): i64 {
+    var len = strlen(s);
+    var off = 0;
+    var done = 0;
+    while (off < len) {
+        if (done != 0) { continue; }
+        var n = sys_write(fd, s + off, len - off);
+        if (n <= 0) { done = 1; continue; }
+        off = off + n;
+    }
+    if (off == len) { return 0; }
+    return 1;
+}
+
+# === Bring up a listener on INADDR_ANY:port ===
+#
+# Returns the bound listening fd, or negative errno on failure.
+fn open_listener(port): i64 {
+    var sr = tcp_socket();
+    if (is_ok(sr) == 0) { return 0 - err_code_of(sr); }
+    var sfd = result_unwrap(sr);
+    sock_reuse(sfd);
+    var br = sock_bind(sfd, INADDR_ANY(), port);
+    if (is_ok(br) == 0) { sock_close(sfd); return 0 - err_code_of(br); }
+    var lr = sock_listen(sfd, LISTEN_BACKLOG);
+    if (is_ok(lr) == 0) { sock_close(sfd); return 0 - err_code_of(lr); }
+    var nr = set_nonblock(sfd);
+    if (nr < 0) { sock_close(sfd); return nr; }
+    return sfd;
+}
+
+# === Tick advance — placeholder ===
+#
+# M1-A no-op. M4-A swaps this for the combat scheduler that walks every
+# engaged combatant. Counter exposed for the M1-H observability hook.
+var g_tick_count = 0;
+fn advance_tick(): i64 {
+    g_tick_count = g_tick_count + 1;
+    return 0;
+}
+
+# === Accept handler — M1-A placeholder ===
+#
+# Drains every pending accept (level-triggered listener with possible
+# multiple clients pending), sends a banner, closes. Session struct
+# + Telnet parser land at M1-B / M1-C; until then connections terminate
+# immediately so the event-loop skeleton is exercisable end-to-end.
+fn handle_accept(listener_fd): i64 {
+    var done = 0;
+    while (done == 0) {
+        var ar = sock_accept(listener_fd);
+        if (is_ok(ar) == 0) {
+            # EAGAIN / EWOULDBLOCK (-11) is the normal drained-the-queue
+            # exit; anything else is a real error that ends the drain
+            # loop without aborting the server.
+            done = 1;
+            continue;
+        }
+        var cfd = result_unwrap(ar);
+        send_cstr(cfd, "yeoman's descent — M1-A skeleton; sessions land at M1-B.\r\n");
+        send_cstr(cfd, "goodbye.\r\n");
+        sock_close(cfd);
+    }
+    return 0;
+}
+
+# === Signal handler — drain the signalfd, return 1 to stop the loop. ===
+#
+# Reads the 128-byte signalfd_siginfo struct; we don't care about the
+# fields at M1-A, only that the fd was readable (i.e. a watched signal
+# fired).
+fn handle_signal(signal_fd): i64 {
+    var sinfo[128];
+    sys_read(signal_fd, &sinfo, 128);
+    return 1;
+}
+
+# === cmd_serve — open listener, run the loop until SIGINT/SIGTERM. ===
+fn cmd_serve(port): i64 {
+    println("yeoman's descent — starting M1-A event-loop listener");
+    println("server: listening on port");
+    print_num(port);
+    println("");
+    var lfd = open_listener(port);
+    if (lfd < 0) {
+        println("server: failed to bind listener (errno below)");
+        efmt_int(0 - lfd);
+        println("");
+        return 1;
+    }
+    var sigfd = install_signal_fd();
+    if (sigfd < 0) {
+        println("server: failed to install signalfd (errno below)");
+        efmt_int(0 - sigfd);
+        println("");
+        sock_close(lfd);
+        return 1;
+    }
+    var epfd = sys_epoll_create();
+    if (epfd < 0) {
+        println("server: failed to create epoll fd (errno below)");
+        efmt_int(0 - epfd);
+        println("");
+        sock_close(lfd);
+        sys_close(sigfd);
+        return 1;
+    }
+    epoll_add_in(epfd, lfd, TAG_LISTENER);
+    epoll_add_in(epfd, sigfd, TAG_SIGNAL);
+    var events_buf = alloc(MAX_EPOLL_EVENTS * EPOLL_EVENT_SIZE);
+    var next_tick = clock_now_ms() + TICK_MS;
+    var stop = 0;
+    while (stop == 0) {
+        var now = clock_now_ms();
+        var timeout_ms = next_tick - now;
+        if (timeout_ms < 0) { timeout_ms = 0; }
+        var n = sys_epoll_wait(epfd, events_buf, MAX_EPOLL_EVENTS, timeout_ms);
+        if (n < 0) {
+            # EINTR (-4) is benign — signals are masked into the signalfd,
+            # but a stray uncaught signal could still interrupt. Loop.
+            continue;
+        }
+        var i = 0;
+        while (i < n) {
+            var ev_off = i * EPOLL_EVENT_SIZE;
+            var data = load64(events_buf + ev_off + 4);
+            if (data == TAG_LISTENER) { handle_accept(lfd); }
+            if (data == TAG_SIGNAL)   { stop = handle_signal(sigfd); }
+            i = i + 1;
+        }
+        # Tick check — absolute scheduling per ADR 0003. If we drifted
+        # past one tick (epoll_wait took longer than expected), advance
+        # next_tick straight to the next future boundary so we don't
+        # fire a burst of catch-up ticks.
+        now = clock_now_ms();
+        if (now >= next_tick) {
+            advance_tick();
+            next_tick = next_tick + TICK_MS;
+            while (next_tick <= now) { next_tick = next_tick + TICK_MS; }
+        }
+    }
+    println("server: shutdown signal received; closing listener.");
+    sys_close(epfd);
+    sys_close(sigfd);
+    sock_close(lfd);
+    return 0;
+}
+

@@ -12,5 +12,9 @@ test = "src/test.cyr"
 output = "cyrius-yeomans-decent"
 
 [deps]
-stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "bench"]
+# M1 stdlib surface. Adds: args (argv dispatch), net (lib/net.cyr socket
+# primitives — see ADR 0002), chrono (clock_now_ms — the tick scheduler
+# uses absolute-time computation per ADR 0003), result + tagged (used
+# by net.cyr's Result return shape), fnptr (vec internals).
+stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "bench", "args", "net", "chrono", "result", "tagged", "fnptr"]
 ---

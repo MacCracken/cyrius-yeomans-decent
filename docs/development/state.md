@@ -47,4 +47,4 @@ _None yet._
 
 ## In flight
 
-Nothing in flight. Next slot is **M1 — TCP / Telnet listener** ([roadmap.md](roadmap.md#m1--tcp--telnet-listener-v020)).
+Nothing in flight. Next slot is **M1-A — Event-loop skeleton** ([roadmap.md](roadmap.md#m1--tcp--telnet-listener-v020)) — non-blocking listener, `epoll`-shape multiplex over `lib/net.cyr`, absolute-time tick scheduling, clean SIGINT shutdown. Sub-bites M1-A → M1-H sequenced in the roadmap.

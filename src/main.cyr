@@ -1,10 +1,69 @@
-# cyrius-yeomans-decent — main entry point
-# Stdlib auto-included via cyrius.cyml
+# cyrius-yeomans-decent — main entry point.
+#
+# argv dispatch. The `serve` verb opens the M1 event-loop listener
+# (per ADR 0003); `version` / `help` are stubs that don't touch the
+# wire. Stdlib auto-included via cyrius.cyml; sibling src/* files
+# need explicit `include` per first-party convention.
 
-fn main() {
-    alloc_init();
-    println("hello from cyrius-yeomans-decent");
+include "src/server.cyr"
+
+var VERSION_STRING = "0.1.0";
+
+fn print_banner(): i64 {
+    println("yeoman's descent — a cyrius-native text MUD");
     return 0;
+}
+
+fn print_help(): i64 {
+    print_banner();
+    println("");
+    println("USAGE: cyrius-yeomans-decent <command> [args]");
+    println("");
+    println("COMMANDS:");
+    println("  serve [port]   start the M1 event-loop listener (default 4000)");
+    println("  version        print version string");
+    println("  help           show this message");
+    println("");
+    println("EXIT CODES:");
+    println("  0  success");
+    println("  1  command-specific failure");
+    println("  2  bad usage (unknown command / arg)");
+    return 0;
+}
+
+fn cmd_version(): i64 {
+    println(VERSION_STRING);
+    return 0;
+}
+
+# Parse argv(2) as a port number; fall back to DEFAULT_PORT if absent
+# or unparseable. Ports outside [1, 65535] reject with usage exit 2.
+fn parse_port(): i64 {
+    if (argc() < 3) { return DEFAULT_PORT; }
+    var raw = argv(2);
+    var p = atoi(raw);
+    if (p < 1) { return 0 - 1; }
+    if (p > 65535) { return 0 - 1; }
+    return p;
+}
+
+fn main(): i64 {
+    alloc_init();
+    args_init();
+    if (argc() < 2) { print_help(); return 2; }
+    var verb = argv(1);
+    if (streq(verb, "help")    == 1) { return print_help(); }
+    if (streq(verb, "version") == 1) { return cmd_version(); }
+    if (streq(verb, "serve")   == 1) {
+        var p = parse_port();
+        if (p < 0) {
+            println("serve: port must be an integer in [1, 65535]");
+            return 2;
+        }
+        return cmd_serve(p);
+    }
+    println("unknown command — try `help`");
+    return 2;
 }
 
 var r = main();
