@@ -40,9 +40,13 @@ jobs:
           cyrius build src/main.cyr build/${{ github.event.repository.name }}
 
       - name: Test
-        # v5.6.28: bare `cyrius test` picks up the [build].test entry
-        # AND auto-discovers tests/*.tcyr — avoids the previous
-        # `cyrius test src/test.cyr` form that hard-failed when the
-        # stub didn't exist (Issue 1) and also wouldn't ever exercise
-        # tests/${proj}.tcyr.
-        run: cyrius test
+        # Cyrius 6.0.1: bare `cyrius test` is unreliable in CI — the
+        # released-tarball toolchain exits with "No .tcyr files found
+        # in tests/tcyr/ or tests/" even when tests/*.tcyr is present
+        # (different code path from the locally-installed cyrius).
+        # Agora 1.0.0's CI hit the same issue at the same version
+        # (`docs/development/roadmap.md` notes the explicit form is
+        # known-good at 6.0.1). Pass the [build].test entry explicitly;
+        # tests/cyrius-yeomans-descent.tcyr stays as the auto-discovered
+        # secondary suite when bare `cyrius test` is invoked locally.
+        run: cyrius test src/test.cyr
